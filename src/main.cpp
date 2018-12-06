@@ -4,13 +4,14 @@
 #include <PubSubClient.h>
 
 // Definição de pinos
+#define BUTTON_PIN 5
 #define OPEN_PIN 14
-#define BUTTON_PIN 16
-#define LED_PIN 4
+#define LED_PIN 12
 
 // definição de parâmetros
-#define ESPERA 60000L
-#define ATRASO 1000
+#define T_DESTRAVADO 60000L
+#define T_ABERTO 1000
+#define BUTTON_PRESS 500
 
 // classe para monitorar o botão de abertura
 class InterruptMonitor
@@ -26,7 +27,7 @@ class InterruptMonitor
   public:
   // variáveis de configuração
 	byte pin;             // numero do pino de entrada
-  unsigned int delay;   // atraso em ms entre o agendamento e a leitura
+  unsigned long delay;   // atraso em ms entre o agendamento e a leitura
 
   // Constructor - cria o monitor
   // and initializes the member variables and state
@@ -42,7 +43,7 @@ class InterruptMonitor
   }
 
   // função que levanta a flag de mudança de estado
-  // deve ser chama externamente, a flag gera um agendamendo no proxumo update
+  // deve ser chama externamente, a flag gera um agendamendo no proximo update
   void raiseFlag() {
     flag = true;
   }
@@ -74,12 +75,12 @@ class InterruptMonitor
 //            VARIÁVEIS GLOBAIS
 //---------------------------------------------//
 // variáveis do controle da porta
-InterruptMonitor button(BUTTON_PIN, ATRASO);
-unsigned long t_liberado;
-bool liberado;
+InterruptMonitor button(BUTTON_PIN, BUTTON_PRESS);
+unsigned long t_destravado, t_aberto;
+bool destravado, aberto;
 
 
-// variável do wifi
+// variáveis do wifi
 const char* ssid = "????";
 const char* pass = "????";
 const unsigned long wifi_rcinterval = 1000;
@@ -88,13 +89,64 @@ WiFiClient wclient;
 char msg[50];
 
 //variável do cliente MQTT
-const char* mqtt_server = "hackerspace.if.usp.br/mqtt";
-const char* mqtt_clientname = "????";   // nome do tópico de publicação
-const char* mqtt_hostname = "????";  // nome do tópico de inscrição
-const unsigned long mqtt_rcinterval = 5000;
+// const char* mqtt_server = "broker.mqttdashboard.com";
+IPAddress mqtt_server(192,168,1,75);
+const char* mqtt_inTopic = "testario/fechadura";   // nome do tópico de publicação
+const char* mqtt_outTopic = "testario/server";  // nome do tópico de inscrição
+const unsigned long mqtt_rcinterval = 3000;
 unsigned long mqtt_lastrc;
 PubSubClient mqtt_client(wclient);
 
+
+void destravar_porta() {
+  t_destravado = millis();
+  destravado = true;
+  digitalWrite(LED_PIN, HIGH);
+  Serial.println("Porta destravada");
+  mqtt_client.publish(mqtt_outTopic, "Porta destravada");
+}
+
+void travar_porta() {
+  destravado = false;
+  digitalWrite(LED_PIN, LOW);
+  Serial.println("Porta travada");
+  mqtt_client.publish(mqtt_outTopic, "Porta travada");
+}
+
+void abre_porta() {
+  aberto = true;
+  digitalWrite(OPEN_PIN, HIGH);
+  travar_porta();
+  Serial.println("Porta aberta");
+  mqtt_client.publish(mqtt_outTopic, "Porta aberta");
+}
+
+void button_set(){
+  button.raiseFlag();
+}
+
+void reconnectWifi() {
+  Serial.print("Conectado-se a rede ");
+  Serial.print(ssid);
+  Serial.println("...");
+  WiFi.begin(ssid, pass);
+
+if (WiFi.waitForConnectResult() != WL_CONNECTED)
+  return;
+Serial.println("WiFi connected");
+}
+
+bool reconnectMQTT() {
+  Serial.println("Connecting to the MQTT broker...");
+  // if (mqtt_client.connect(mqtt_clientname)) {
+    if (mqtt_client.connect("client_kjhadu4")) {
+    // Once connected, publish an announcement...
+    mqtt_client.publish(mqtt_outTopic, "hello world", true);
+    // ... and resubscribe
+    mqtt_client.subscribe(mqtt_inTopic);
+  }
+  return mqtt_client.connected();
+}
 
 // callback que lida com as mensagem recebidas
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
@@ -110,50 +162,14 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     // resp[sizeof(resp) -1] = '\0';
 
     Serial.println(msg);
-    char* temp = strtok(msg, "=");  // horário de envio da msg
-    char* command = strtok(0, "="); // comando
+    char* command = strtok(msg, "=");  // horário de envio da msg
+    char* temp = strtok(NULL, "="); // comando
+    Serial.print("Comando: "); Serial.println(command);
+    Serial.print("temp: "); Serial.println(temp);
 
-    if(strcmp(command, "liberado")) {
-      liberar_porta();
+    if(strcmp(command, "liberar") == 0) {
+      destravar_porta();
     }
-}
-
-void liberar_porta() {
-  t_liberado = millis();
-  liberado = true;
-}
-
-void abre_porta() {
-  digitalWrite(OPEN_PIN, HIGH);
-  delay(1000);
-  digitalWrite(OPEN_PIN, LOW);
-  liberado = false;
-}
-
-void button_set(){
-  button.raiseFlag();
-}
-
-void reconnectWifi() {
-  Serial.print("Connecting to ");
-  Serial.print(ssid);
-  Serial.println("...");
-  WiFi.begin(ssid, pass);
-
-if (WiFi.waitForConnectResult() != WL_CONNECTED)
-  return;
-Serial.println("WiFi connected");
-}
-
-bool reconnectMQTT() {
-  Serial.println("Connecting to the MQTT broker...");
-  if (mqtt_client.connect(mqtt_clientname)) {
-    // Once connected, publish an announcement...
-    mqtt_client.publish(mqtt_clientname, "hello world", true);
-    // ... and resubscribe
-    mqtt_client.subscribe(mqtt_hostname);
-  }
-  return mqtt_client.connected();
 }
 
 //---------------------------------------------//
@@ -168,8 +184,11 @@ void setup()  {
   pinMode(OPEN_PIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
 
+  // digitalWrite(OPEN_PIN, HIGH);
+  // digitalWrite(LED_PIN, HIGH);
+
   // configura interruptor dos pinos de entrada
-  attachInterrupt(digitalPinToInterrupt(button.pin), button_set, RISING);
+  attachInterrupt(digitalPinToInterrupt(button.pin), button_set, LOW);
 
   // configuracao do wifi
   WiFi.mode(WIFI_STA);
@@ -185,18 +204,22 @@ void setup()  {
 void loop() {
   // Controle da porta
   // Se a porta estiver liberada para abertura...
-  if (liberado) {
+  if (destravado) {
   // abre a porta se o botão for pressionado
-    if (button.update() == HIGH) {
-        //envia mensagem
-        // mqtt_client.publish(mqtt_clientname, "Abriu");
-        abre_porta();
-      }
-
-    // retira a liberação da porta depois de 'ESPERA' ms
-    if (liberado && millis() - t_liberado > ESPERA) {
-        liberado = false;
+    // if (button.update() == LOW) {
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      abre_porta();
+      t_aberto = millis();
     }
+
+    // retira a liberação da porta depois de 'T_LIBERADO' ms
+    if (millis() - t_destravado > T_DESTRAVADO) {
+      travar_porta();
+    }
+  }
+  if (aberto && millis() - t_aberto > T_ABERTO) {
+    digitalWrite(OPEN_PIN, LOW);
+    aberto = false;
   }
 
   // reconecta ao wifi
