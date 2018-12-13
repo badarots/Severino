@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <InterruptMonitor.h>
 
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
@@ -13,64 +14,6 @@
 #define T_ABERTO 1000
 #define BUTTON_PRESS 500
 
-// classe para monitorar o botão de abertura
-class InterruptMonitor
-{
-	// Class Member Variables
-
-  // variáveis internas
-  volatile bool flag;   // flag que avisa quando há mudança de estado
-  bool do_read;         // flag que marca o agendamento de um leitura atrasada
-  bool last_read;       // estado da última leitura
-  unsigned long last_schedule;  // último agendamento da leitura
-
-  public:
-  // variáveis de configuração
-	byte pin;             // numero do pino de entrada
-  unsigned long delay;   // atraso em ms entre o agendamento e a leitura
-
-  // Constructor - cria o monitor
-  // and initializes the member variables and state
-  InterruptMonitor(byte input_pin, unsigned long msdelay)
-  {
-	pin = input_pin;
-	pinMode(pin, INPUT_PULLUP);
-
-  delay = msdelay;
-  flag = do_read = false;
-  last_read = digitalRead(pin);
-  last_schedule = 0;
-  }
-
-  // função que levanta a flag de mudança de estado
-  // deve ser chama externamente, a flag gera um agendamendo no proximo update
-  void raiseFlag() {
-    flag = true;
-  }
-
-  int update() {
-    // variável que guarda resposta
-    // -1: não houve mudanças, 0: pino mudou para low, 1: pino mudou para high
-    int resp = -1;
-
-    // agenda leitura atrasada:
-    if (flag) {
-      last_schedule = millis();
-      flag = false;
-      do_read = true;
-    }
-    // executa leitura atrasada
-    if (do_read && millis() - last_schedule > delay) {
-      do_read = false;
-      bool read = digitalRead(pin);
-
-      if (read != last_read) resp = last_read = read;
-    }
-    return resp;
-  }
-};
-
-
 //---------------------------------------------//
 //            VARIÁVEIS GLOBAIS
 //---------------------------------------------//
@@ -83,21 +26,23 @@ bool destravado, aberto;
 // variáveis do wifi
 const char* ssid = "????";
 const char* pass = "????";
-const unsigned long wifi_rcinterval = 1000;
+const unsigned long wifi_rcinterval = 1000; // Intervalo entre reconexões
 unsigned long wifi_lastrc;
 WiFiClient wclient;
-char msg[50];
 
 //variável do cliente MQTT
 // const char* mqtt_server = "broker.mqttdashboard.com";
 IPAddress mqtt_server(192,168,1,75);
 const char* mqtt_inTopic = "testario/fechadura";   // nome do tópico de publicação
 const char* mqtt_outTopic = "testario/server";  // nome do tópico de inscrição
-const unsigned long mqtt_rcinterval = 3000;
+const unsigned long mqtt_rcinterval = 3000;     // Intervalo entre reconexões
 unsigned long mqtt_lastrc;
 PubSubClient mqtt_client(wclient);
 
 
+//---------------------------------------------//
+//            FUNÇÕES
+//---------------------------------------------//
 void destravar_porta() {
   t_destravado = millis();
   destravado = true;
@@ -121,7 +66,7 @@ void abre_porta() {
   mqtt_client.publish(mqtt_outTopic, "Porta aberta");
 }
 
-void button_set(){
+void button_set() {
   button.raiseFlag();
 }
 
@@ -175,7 +120,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 //---------------------------------------------//
 //                  SETUP
 //---------------------------------------------//
-void setup()  {
+void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.println();
@@ -217,6 +162,8 @@ void loop() {
       travar_porta();
     }
   }
+
+  // Mantém a porta aberta por "T_ABERTOR" ms e para
   if (aberto && millis() - t_aberto > T_ABERTO) {
     digitalWrite(OPEN_PIN, LOW);
     aberto = false;
