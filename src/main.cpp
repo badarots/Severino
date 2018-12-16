@@ -117,7 +117,7 @@ bool reconnectMQTT() {
     // ... and resubscribe
     mqtt_client.subscribe(mqtt_inTopic);
   } else {
-    Serial.print('falha, rc=');
+    Serial.print("falha, rc=");
     Serial.print(mqtt_client.state());
     Serial.print(" tentando novamente em ");
     Serial.print(mqtt_rcinterval/1000);
